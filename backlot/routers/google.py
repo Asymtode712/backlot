@@ -507,19 +507,19 @@ def _gmail_check_shape(served_id: str) -> None:
 
 
 def _gmail_resolve(served_id: str) -> str | None:
-    """Validate a served Gmail id's SHAPE and hand it back — a thread is keyed on the root
-    message's own id, so there is nothing left to translate, only to reject.
+    """Validate a served Gmail id's SHAPE and return its stored spelling — a thread is keyed on
+    the root message's own id, so normalization removes only client-side leading zeros and case.
 
     Kept as a named step rather than inlined because the shape check must run BEFORE any lookup:
     an unparsable id is 400 INVALID_ARGUMENT whether or not it would have resolved. No
     ``visible_ids``: the ACL read stays in the caller (`store.gmail_thread`), so an id naming a
     thread the caller cannot see is not-found, never a different answer.
 
-    Lowercased, because the id is hex and real Gmail resolves either spelling: `store.gmail_by_id`
-    folds case, so returning the spelling as given made `threads.get` the one route that did not —
-    an uppercase id missed the exact `thread_id = ?` lookup and fell through to a single message."""
+    Real Gmail parses ids as integers, so `threads.get` must use the same normalization as
+    `messages.get`; otherwise a padded spelling misses the exact `thread_id = ?` lookup and falls
+    through to a single message."""
     _gmail_check_shape(served_id)
-    return served_id.lower()
+    return store.gmail_id_spelling(served_id)
 
 
 def _gmail_doc(conn, ids, served_id: str):
@@ -699,9 +699,10 @@ async def gmail_thread_get(user_id: str, thread_id: str, request: Request):
         msgs = [row]
     fmt = request.query_params.get("format", "full")
     # No `snippet`: real serves one on a `threads.list` entry and not on `threads.get`, with or
-    # without `format=minimal` — measured on 2026-09-30.
+    # without `format=minimal` — measured on 2026-09-30. The response id is the canonical root
+    # id, even when the request used leading zeros or uppercase — measured on 2026-10-03.
     return {
-        "id": thread_id.lower(),
+        "id": _gmail_ids(msgs[0])[1],
         "historyId": "1",
         "messages": [_gmail_message(m, fmt, caller.email) for m in msgs],
     }

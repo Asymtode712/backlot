@@ -233,6 +233,34 @@ def test_gmail_hex_id_resolves_to_the_same_document(client, admin_h, ro_conn):
     assert upper["id"] == m["id"]
 
 
+def test_gmail_thread_padded_id_resolves_to_the_full_thread(client, admin_h, ro_conn):
+    """Real Gmail parses leading-zero spellings as the same integer id: threads.get returns the
+    canonical thread id and every message, not the root-only fallback."""
+
+    row = ro_conn.execute(
+        "SELECT m.* FROM gmail_messages AS m "
+        "WHERE m.thread_id = m.id AND ("
+        "SELECT COUNT(*) FROM gmail_messages WHERE thread_id = m.thread_id"
+        ") > 1 LIMIT 1"
+    ).fetchone()
+    assert row is not None, "SAMPLE should hold a multi-message Gmail thread"
+    root_id = row["id"]
+    expected = client.get(
+        f"/gmail/v1/users/me/threads/{root_id}",
+        headers=admin_h,
+        params={"format": "minimal"},
+    ).json()
+    padded = client.get(
+        f"/gmail/v1/users/me/threads/0{root_id.upper()}",
+        headers=admin_h,
+        params={"format": "minimal"},
+    )
+    assert padded.status_code == 200
+    assert padded.json() == expected
+    assert padded.json()["id"] == root_id
+    assert len(padded.json()["messages"]) > 1
+
+
 def test_gmail_thread_id_matches_the_message_id_for_a_lone_message(client, admin_h, ro_conn):
     """Threads share the message id space in real Gmail, so a message that is its own thread root
     reports the same value twice — and `threads.get` resolves it."""
