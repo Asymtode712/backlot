@@ -200,7 +200,7 @@ def test_gmail_messages_list_serves_hex_ids(client, admin_h):
     not hex, so real Gmail would call it an invalid id value.
 
     Up to 16 digits, not exactly 16: real Gmail renders the integer, so an id whose top nibble is
-    zero is shorter there — and the real API resolves that spelling while 404ing the padded one."""
+    zero is shorter there."""
     msgs = client.get(
         "/gmail/v1/users/me/messages", headers=admin_h, params={"maxResults": 10}
     ).json()["messages"]
@@ -226,39 +226,46 @@ def test_gmail_hex_id_resolves_to_the_same_document(client, admin_h, ro_conn):
     assert base64.urlsafe_b64decode(_gmail_plain(m["payload"])).decode() == row["content"]
     # The stored column is lowercase hex, but a client may spell the id in either case (Gmail's ids
     # are case-insensitive hex) -- resolution must fold case rather than requiring the exact stored
-    # spelling. `store.gmail_by_id` is the one place that has to do this.
+    # spelling. `store.gmail_id_spelling` is the one place that has to do this.
     upper = client.get(
         f"/gmail/v1/users/me/messages/{hexid.upper()}", headers=admin_h, params={"format": "full"}
     ).json()
     assert upper["id"] == m["id"]
 
 
-def test_gmail_thread_padded_id_resolves_to_the_full_thread(client, admin_h, ro_conn):
-    """Real Gmail parses leading-zero spellings as the same integer id: threads.get returns the
-    canonical thread id and every message, not the root-only fallback."""
-
+@pytest.mark.parametrize(
+    "spelling, same_as",
+    [
+        ("0{root}", "{root}"),
+        ("00{root}", "{root}"),
+        ("0000000000{root}", "{root}"),
+        ("0{ROOT}", "{root}"),
+        ("0{reply}", "1"),
+    ],
+)
+def test_gmail_threads_get_reads_zeros_in_front_of_an_id_as_the_id(
+    client, admin_h, ro_conn, spelling, same_as
+):
+    """`threads.get` on a thread's id with one, two or ten zeros in front, its hex in either case,
+    serves the thread as the id without them does; on a reply's id with a zero in front it serves
+    the 404 of an id the mailbox does not hold (`1`). The measurement is beside the return in
+    `gmail_thread_get`."""
     row = ro_conn.execute(
-        "SELECT m.* FROM gmail_messages AS m "
-        "WHERE m.thread_id = m.id AND ("
-        "SELECT COUNT(*) FROM gmail_messages WHERE thread_id = m.thread_id"
-        ") > 1 LIMIT 1"
+        "SELECT * FROM gmail_messages WHERE COALESCE(thread_id,'') != '' "
+        "AND thread_id != id LIMIT 1"
     ).fetchone()
-    assert row is not None, "SAMPLE should hold a multi-message Gmail thread"
-    root_id = row["id"]
-    expected = client.get(
-        f"/gmail/v1/users/me/threads/{root_id}",
-        headers=admin_h,
-        params={"format": "minimal"},
-    ).json()
-    padded = client.get(
-        f"/gmail/v1/users/me/threads/0{root_id.upper()}",
-        headers=admin_h,
-        params={"format": "minimal"},
-    )
-    assert padded.status_code == 200
-    assert padded.json() == expected
-    assert padded.json()["id"] == root_id
-    assert len(padded.json()["messages"]) > 1
+    assert row is not None, "SAMPLE should hold a threaded reply"
+    ids = {"root": row["thread_id"], "ROOT": row["thread_id"].upper(), "reply": row["id"]}
+
+    def threads_get(thread_id):
+        return client.get(
+            f"/gmail/v1/users/me/threads/{thread_id.format(**ids)}",
+            headers=admin_h,
+            params={"format": "minimal"},
+        )
+
+    got, want = threads_get(spelling), threads_get(same_as)
+    assert (got.status_code, got.json()) == (want.status_code, want.json())
 
 
 def test_gmail_thread_id_matches_the_message_id_for_a_lone_message(client, admin_h, ro_conn):
@@ -278,9 +285,6 @@ def test_gmail_thread_id_matches_the_message_id_for_a_lone_message(client, admin
     assert m["id"] == m["threadId"] == hexid
     t = client.get(f"/gmail/v1/users/me/threads/{hexid}", headers=admin_h)
     assert t.status_code == 200 and t.json()["id"] == hexid
-    # A gmail id is hex and real resolves either spelling, so `threads.get` must fold case the way
-    # `messages.get` does — an exact `thread_id = ?` lookup on the caller's spelling missed and
-    # served a one-message thread for a thread that has more.
     upper = client.get(f"/gmail/v1/users/me/threads/{hexid.upper()}", headers=admin_h)
     assert upper.status_code == 200 and upper.json() == t.json()
 
