@@ -1028,24 +1028,30 @@ def test_drive_a_page_token_it_did_not_issue_is_refused(client, admin_h):
 
 
 @pytest.mark.parametrize(
-    "query, location",
+    "query, code, location",
     [
-        ([("pageToken", "BOGUS"), ("pageSize", "NOPE")], None),
-        ([("fields", "bogus"), ("pageSize", "0")], "page_size"),
-        ([("fields", "bogus"), ("pageToken", "BOGUS")], "pageToken"),
-        ([("pageToken", "BOGUS"), ("fields", "bogus")], "pageToken"),
-        ([("pageToken", "BOGUS"), ("q", "nosuchfield = 1")], "q"),
-        ([("fields", "bogus"), ("q", "nosuchfield = 1")], "q"),
-        ([("q", "nosuchfield = 1"), ("orderBy", "bogus")], "orderBy"),
-        ([("orderBy", "bogus"), ("q", "nosuchfield = 1")], "orderBy"),
-        ([("fields", "bogus"), ("orderBy", "bogus")], "orderBy"),
+        ([("pageToken", "BOGUS"), ("pageSize", "NOPE")], 400, None),
+        ([("fields", "bogus"), ("pageSize", "0")], 400, "page_size"),
+        ([("fields", "bogus"), ("pageToken", "BOGUS")], 400, "pageToken"),
+        ([("pageToken", "BOGUS"), ("fields", "bogus")], 400, "pageToken"),
+        ([("pageToken", "BOGUS"), ("q", "nosuchfield = 1")], 400, "q"),
+        ([("fields", "bogus"), ("q", "nosuchfield = 1")], 400, "q"),
+        ([("q", "nosuchfield = 1"), ("orderBy", "bogus")], 400, "orderBy"),
+        ([("orderBy", "bogus"), ("q", "nosuchfield = 1")], 400, "orderBy"),
+        ([("fields", "bogus"), ("orderBy", "bogus")], 400, "orderBy"),
+        ([("orderBy", "name,name"), ("pageSize", "0")], 400, "page_size"),
+        ([("orderBy", "name,name"), ("pageSize", "NOPE")], 400, None),
+        ([("q", "nosuchfield = 1"), ("orderBy", "name,name")], 403, "orderBy"),
+        ([("orderBy", "name,name"), ("q", "nosuchfield = 1")], 403, "orderBy"),
+        ([("pageToken", "BOGUS"), ("orderBy", "name,name")], 403, "orderBy"),
+        ([("fields", "bogus"), ("orderBy", "name,name")], 403, "orderBy"),
     ],
 )
-def test_drive_files_list_refuses_in_reals_order(client, admin_h, query, location):
+def test_drive_files_list_refuses_in_reals_order(client, admin_h, query, code, location):
     """Two bad values at once, each pair in the order `drive_files_list`'s comment records. A
     `pageSize` the proto layer cannot read has no `location`."""
     e = _gerr(client.get("/drive/v3/files", headers=admin_h, params=query))
-    assert e["code"] == 400
+    assert e["code"] == code
     assert e["errors"][0].get("location") == location
 
 
@@ -2524,6 +2530,47 @@ def test_drive_order_by_rejects_keys_it_cannot_honor(client, admin_h):
         "/drive/v3/files", headers=admin_h, params={"orderBy": "folder,name desc", "pageSize": 5}
     )
     assert ok.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "order_by, status",
+    [
+        ("name", 200),
+        ("name,modifiedTime", 200),
+        ("name desc,modifiedTime", 200),
+        ("recency,modifiedTime", 200),
+        ("name,name", 403),
+        ("name desc,name", 403),
+        ("name,name desc", 403),
+        ("name desc,name desc", 403),
+        ("modifiedTime,name,modifiedTime", 403),
+        ("name_natural,name", 403),
+        ("name,name_natural", 403),
+        ("name,name,bogus", 403),
+        ("name,bogus,name", 400),
+        ("name,name sideways", 400),
+    ],
+)
+def test_drive_order_by_refuses_a_repeated_sort_key(client, admin_h, order_by, status):
+    """A key named twice is the 403 `_drive_order_specs` describes, and its `error` object is the
+    one real sends; an unusable token at or before the repeat is the 400."""
+    r = client.get("/drive/v3/files", headers=admin_h, params={"pageSize": 1, "orderBy": order_by})
+    assert r.status_code == status, r.text
+    if status == 403:
+        message = "The orderBy parameter cannot contain duplicate sort keys."
+        assert _gerr(r) == {
+            "code": 403,
+            "message": message,
+            "errors": [
+                {
+                    "message": message,
+                    "domain": "global",
+                    "reason": "orderByContainsDuplicateSortKeys",
+                    "location": "orderBy",
+                    "locationType": "parameter",
+                }
+            ],
+        }
 
 
 def test_drive_invalid_fields_mask_is_rejected(client, admin_h):

@@ -1596,8 +1596,9 @@ def _drive_order_specs(order_by: str | None) -> list[tuple]:
     """Parse ``orderBy`` — comma-separated keys, each optionally suffixed ``desc`` — into
     ``(key function, reverse)`` pairs. An unusable key is a 400, as on the real API — accepting one
     and not applying it would let a client relying on server-side ordering pass here and misbehave
-    against the real thing."""
+    against the real thing. A key named twice is a 403."""
     specs = []
+    seen: set[str] = set()
     for tok in (order_by or "").split(","):
         parts = tok.split()
         if not parts:
@@ -1613,6 +1614,14 @@ def _drive_order_specs(order_by: str | None) -> list[tuple]:
             )
         if key not in _DRIVE_ORDER_KEYS:
             raise gerr.invalid_value("orderBy", f"Invalid sort key: {tok.strip()}")
+        # Real Drive (measured 2026-10-04) 403s a key named twice whatever either direction is, and
+        # reads `name_natural` as `name` but `recency` and `modifiedTime` as two keys — so this
+        # compares names, not the key functions. It reads left to right and answers the first
+        # problem it meets, so the repeat is checked only once the token passes the checks above.
+        name = "name" if key == "name_natural" else key
+        if name in seen:
+            raise gerr.duplicate_sort_keys()
+        seen.add(name)
         specs.append((_DRIVE_ORDER_KEYS[key], len(parts) == 2))
     return specs
 
@@ -1925,7 +1934,8 @@ async def drive_files_list(request: Request):
     me = caller.email
     # Each read off the first repeat, as real reads them -- see `gerr.first_repeat`. Refused in
     # real's order, measured 2026-09-23 by sending two bad values at once: `pageSize` first, then
-    # `orderBy`, `q`, `pageToken` and `fields`, whichever order the query names them in.
+    # `orderBy`, `q`, `pageToken` and `fields`, whichever order the query names them in. The 403 for
+    # an `orderBy` naming a key twice comes at the same point, measured 2026-10-05.
     params = request.query_params
     typed = _drive_typed(
         request,
@@ -1936,7 +1946,8 @@ async def drive_files_list(request: Request):
         page_size=True,
     )
     limit = _drive_page_size(typed["pageSize"])
-    order = _drive_order_specs(gerr.first_repeat(params, "orderBy"))  # 400 on an unusable key
+    # 400 on an unusable key, 403 on a key named twice
+    order = _drive_order_specs(gerr.first_repeat(params, "orderBy"))
     q = gerr.first_repeat(params, "q") or ""
     query = _drive_q_parse(q)  # 400 on a clause Backlot cannot evaluate; None when there is no q
     # Measured 2026-09-23: a token the API did not issue is 400 `Invalid Value`, where an empty one
