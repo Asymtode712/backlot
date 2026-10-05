@@ -236,6 +236,7 @@ def test_gmail_hex_id_resolves_to_the_same_document(client, admin_h, ro_conn):
 @pytest.mark.parametrize(
     "spelling, same_as",
     [
+        ("{ROOT}", "{root}"),
         ("0{root}", "{root}"),
         ("00{root}", "{root}"),
         ("0000000000{root}", "{root}"),
@@ -243,13 +244,13 @@ def test_gmail_hex_id_resolves_to_the_same_document(client, admin_h, ro_conn):
         ("0{reply}", "1"),
     ],
 )
-def test_gmail_threads_get_reads_zeros_in_front_of_an_id_as_the_id(
+def test_gmail_threads_get_reads_an_id_as_a_hex_integer(
     client, admin_h, ro_conn, spelling, same_as
 ):
-    """`threads.get` on a thread's id with one, two or ten zeros in front, its hex in either case,
-    serves the thread as the id without them does; on a reply's id with a zero in front it serves
-    the 404 of an id the mailbox does not hold (`1`). The measurement is beside the return in
-    `gmail_thread_get`."""
+    """`threads.get` on a thread's id in uppercase, or with one, two or ten zeros in front and its
+    hex in either case, serves the thread as the lowercase id without them does; on a reply's id
+    with a zero in front it serves the 404 of an id the mailbox does not hold (`1`). The measurement
+    is beside the return in `gmail_thread_get`."""
     row = ro_conn.execute(
         "SELECT * FROM gmail_messages WHERE COALESCE(thread_id,'') != '' "
         "AND thread_id != id LIMIT 1"

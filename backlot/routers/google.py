@@ -703,8 +703,9 @@ async def gmail_thread_get(user_id: str, thread_id: str, request: Request):
         msgs = [row]
     fmt = request.query_params.get("format", "full")
     # No `snippet`: real serves one on a `threads.list` entry and not on `threads.get`, with or
-    # without `format=minimal` — measured on 2026-09-30. A thread id with zeros in front, in either
-    # case, gets the answer the id without them gets, `id` included — measured on 2026-10-03.
+    # without `format=minimal` — measured on 2026-09-30. An id in uppercase, with zeros in front, or
+    # both gets the answer the lowercase id without them gets, `id` included — measured on
+    # 2026-10-03 and 2026-10-05.
     return {
         "id": _gmail_ids(msgs[0])[1],
         "historyId": "1",
