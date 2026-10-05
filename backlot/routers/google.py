@@ -506,18 +506,15 @@ def _gmail_check_shape(served_id: str) -> None:
         raise gerr.invalid_id_value()
 
 
-def _gmail_resolve(served_id: str) -> str | None:
-    """Validate a served Gmail id's SHAPE and return its stored spelling — a thread is keyed on
-    the root message's own id, so normalization removes only client-side leading zeros and case.
+def _gmail_resolve(served_id: str) -> str:
+    """Validate a served Gmail id's SHAPE and return its stored spelling
+    (`store.gmail_id_spelling`), the key `store.gmail_thread` looks a thread up by: a thread is
+    keyed on its root message's own id.
 
     Kept as a named step rather than inlined because the shape check must run BEFORE any lookup:
     an unparsable id is 400 INVALID_ARGUMENT whether or not it would have resolved. No
     ``visible_ids``: the ACL read stays in the caller (`store.gmail_thread`), so an id naming a
-    thread the caller cannot see is not-found, never a different answer.
-
-    Real Gmail parses ids as integers, so `threads.get` must use the same normalization as
-    `messages.get`; otherwise a padded spelling misses the exact `thread_id = ?` lookup and falls
-    through to a single message."""
+    thread the caller cannot see is not-found, never a different answer."""
     _gmail_check_shape(served_id)
     return store.gmail_id_spelling(served_id)
 
@@ -694,7 +691,7 @@ async def gmail_thread_get(user_id: str, thread_id: str, request: Request):
     caller = _require(request)
     ids = auth.visible_ids(request, caller)
     thread_key = _gmail_resolve(thread_id)
-    msgs = store.gmail_thread(conn, thread_key, visible_ids=ids) if thread_key else []
+    msgs = store.gmail_thread(conn, thread_key, visible_ids=ids)
     if not msgs:
         row = _gmail_doc(conn, ids, thread_id)
         # Measured against gmail.googleapis.com on 2026-09-30 and 2026-10-01: `threads.get` on a
@@ -706,8 +703,8 @@ async def gmail_thread_get(user_id: str, thread_id: str, request: Request):
         msgs = [row]
     fmt = request.query_params.get("format", "full")
     # No `snippet`: real serves one on a `threads.list` entry and not on `threads.get`, with or
-    # without `format=minimal` — measured on 2026-09-30. The response id is the canonical root
-    # id, even when the request used leading zeros or uppercase — measured on 2026-10-03.
+    # without `format=minimal` — measured on 2026-09-30. A thread id with zeros in front, in either
+    # case, gets the answer the id without them gets, `id` included — measured on 2026-10-03.
     return {
         "id": _gmail_ids(msgs[0])[1],
         "historyId": "1",
