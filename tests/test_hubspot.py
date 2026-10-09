@@ -80,6 +80,68 @@ def test_hubspot_archived_parameter_reads_its_first_value_and_only_true_as_true(
         assert r.json() == client.get(url, headers=admin_h).json()
 
 
+@pytest.mark.parametrize(
+    "object_type,type_label",
+    [
+        ("meetings", "0-47 (MEETING_EVENT)"),
+        ("meeting", "0-47 (MEETING_EVENT)"),
+        ("0-47", "0-47 (MEETING_EVENT)"),
+        ("communications", "0-18 (COMMUNICATION)"),
+        ("communication", "0-18 (COMMUNICATION)"),
+        ("deal_splits", "0-72 (DEAL_SPLIT)"),
+        ("deal_split", "0-72 (DEAL_SPLIT)"),
+        ("quote_templates", "0-64 (QUOTE_TEMPLATE)"),
+        ("quote_template", "0-64 (QUOTE_TEMPLATE)"),
+    ],
+)
+def test_hubspot_archived_listing_refuses_unsupported_types(
+    client, admin_h, object_type, type_label
+):
+    url = f"/hubspot/crm/v3/objects/{object_type}"
+    r = client.get(url, headers=admin_h, params={"archived": "true"})
+    assert r.status_code == 400
+    body = r.json()
+    assert body["status"] == "error"
+    assert body["message"] == (
+        f"Paging through deleted objects is not yet supported for object type {type_label}"
+    )
+    assert body["category"] == "VALIDATION_ERROR"
+    assert client.get(url, headers=admin_h).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "params,refused",
+    [
+        ({"archived": "TRUE"}, True),
+        ({"archived": "True"}, True),
+        ({"archived": ["true", "false"]}, True),
+        ({"archived": "true", "limit": "1"}, True),
+        ({"archived": "true", "properties": "hs_meeting_title"}, True),
+        ({"archived": "yes"}, False),
+        ({"archived": "false"}, False),
+        ({"archived": ["false", "true"]}, False),
+    ],
+)
+def test_hubspot_meetings_refuses_or_lists_by_the_parsed_flag(client, admin_h, params, refused):
+    url = "/hubspot/crm/v3/objects/meetings"
+    r = client.get(url, headers=admin_h, params=params)
+    expected = client.get(url, headers=admin_h, params={"archived": "true"} if refused else None)
+    assert r.status_code == (400 if refused else 200)
+    assert r.json() == expected.json()
+
+
+@pytest.mark.parametrize("headers", [None, "admin"])
+def test_hubspot_archived_refusal_follows_authentication_and_cursor_validation(
+    client, admin_h, headers
+):
+    url = "/hubspot/crm/v3/objects/meetings"
+    h = admin_h if headers == "admin" else {}
+    r = client.get(url, headers=h, params={"archived": "true", "after": "abc"})
+    control = client.get(url, headers=h, params={"after": "abc"})
+    assert r.status_code == control.status_code == (400 if h else 401)
+    assert r.json() == control.json()
+
+
 def test_hubspot_list_cursor_pages_without_overlap(client, admin_h):
     """The cursor path itself: pages of two over the three non-archived companies, no repeats, no
     gaps, and the walk ends by `paging.next` disappearing rather than by a page coming back empty."""
