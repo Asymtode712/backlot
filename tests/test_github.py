@@ -4824,9 +4824,31 @@ def test_github_the_statuses_listing_declares_the_page_parameters_real_accepts(c
     assert {"page", "per_page"} <= {p["name"] for p in op.get("parameters", [])}
 
 
-def test_github_search_still_filters_by_q(client, admin_h):
-    body = client.get("/github/search/issues", params={"q": "is:issue"}, headers=admin_h).json()
-    assert "items" in body and "total_count" in body
+@pytest.mark.parametrize(
+    "path, q, search_type",
+    [
+        ("/github/search/issues", "is:issue", "lexical"),
+        ("/github/search/issues", "is:pr", "lexical"),
+        ("/github/search/issues", "no-matching-issue-lexical-search", "lexical"),
+        ("/github/search/code", "extension:md", None),
+    ],
+)
+def test_github_search_envelope_members_and_their_order_match_real(
+    client, admin_h, path, q, search_type
+):
+    """Issue search sends `search_type` last, after `items`; code search sends no such member."""
+    response = client.get(path, params={"q": q}, headers=admin_h)
+    assert response.status_code == 200
+    members = ["total_count", "incomplete_results", "items"] + ["search_type"] * bool(search_type)
+    assert list(response.json()) == members
+    assert response.json().get("search_type") == search_type
+
+
+def test_github_issue_search_schema_requires_search_type(client):
+    spec = client.get("/openapi.json").json()
+    schema = spec["components"]["schemas"]["GitHubIssueSearch"]
+    assert "search_type" in schema["required"]
+    assert schema["properties"]["search_type"]["type"] == "string"
 
 
 def test_github_responses_unchanged_by_enrichment(client, admin_h):
